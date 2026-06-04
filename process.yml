@@ -1,0 +1,91 @@
+# ✅ Extract Volume ID
+- name: Extract Volume ID
+  set_fact:
+    volume_id: "{{ cr.description | regex_search('vol-[a-zA-Z0-9]+') }}"
+
+# ✅ Extract Target Size
+- name: Extract Target Size
+  set_fact:
+    target_size: "{{ cr.description | regex_search('[0-9]+') | int }}"
+
+# ✅ Get Volume Info
+- name: Get volume info
+  amazon.aws.ec2_vol_info:
+    region: "{{ aws_region }}"
+    volume_ids:
+      - "{{ volume_id }}"
+  register: vol_info
+
+# ✅ Current size
+- name: Set current size
+  set_fact:
+    current_size: "{{ vol_info.volumes[0].size }}"
+
+# ✅ Debug
+- debug:
+    msg: "Volume {{ volume_id }} current={{ current_size }}GB target={{ target_size }}GB"
+
+# ✅ SCALE EBS
+- block:
+
+    - name: Scale EBS volume
+      amazon.aws.ec2_vol:
+        region: "{{ aws_region }}"
+        volume_id: "{{ volume_id }}"
+        size: "{{ target_size }}"
+        state: present
+      when: target_size > current_size
+
+    - name: Wait for AWS update
+      pause:
+        seconds: 20
+
+    # ✅ FILESYSTEM RESIZE (REMOTE EC2)
+    - name: Resize filesystem on EC2
+      delegate_to: ec2-server
+      become: yes
+      shell: |
+        if df -Th | grep xfs; then
+          xfs_growfs /
+        else
+          growpart /dev/xvda 1
+          resize2fs /dev/xvda1
+        fi
+
+    - name: Mark success
+      set_fact:
+        scale_status: "SUCCESS"
+
+  rescue:
+
+    - name: Mark failure
+      set_fact:
+        scale_status: "FAILED"
+
+# ✅ UPDATE SERVICENOW SUCCESS
+- name: Update CR success
+  uri:
+    url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
+    method: PATCH
+    user: "{{ snow_user }}"
+    password: "{{ snow_password }}"
+    force_basic_auth: yes
+    body_format: json
+    body:
+      work_notes: "EBS {{ volume_id }} scaled to {{ target_size }}GB and filesystem resized"
+      state: "Implement"
+  when: scale_status == "SUCCESS"
+
+# ✅ UPDATE SERVICENOW FAILURE
+- name: Update CR failure
+  uri:
+    url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
+    method: PATCH
+    user: "{{ snow_user }}"
+    password: "{{ snow_password }}"
+    force_basic_auth: yes
+    body_format: json
+    body:
+      work_notes: "Scaling FAILED - L2 escalation required"
+      state: "Assess"
+  when: scale_status == "FAILED"

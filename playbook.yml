@@ -1,0 +1,14 @@
+- name: EBS Scaling + Filesystem Resize
+  hosts: localhost
+  gather_facts: no
+
+  roles:
+    - servicenow_fetch
+
+  tasks:
+
+    - name: Process each CR
+      include_tasks: process.yml
+      loop: "{{ cr_list }}"
+      loop_control:
+        loop_var: cr

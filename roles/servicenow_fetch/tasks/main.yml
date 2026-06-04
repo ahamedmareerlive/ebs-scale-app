@@ -1,0 +1,17 @@
+#SPDX-License-Identifier: MIT-0
+---
+- name: Fetch Change Requests
+  uri:
+    url: "{{ snow_instance }}/api/now/table/change_request?sysparm_query=short_descriptionLIKE Disk Scale EBS^state=New"
+    method: GET
+    user: "{{ snow_user }}"
+    password: "{{ snow_password }}"
+    force_basic_auth: yes
+    return_content: yes
+  register: cr_response
+
+- name: Store CR list
+  set_fact:
+    cr_list: "{{ cr_response.json.result }}"
+
+# tasks file for roles/servicenow_fetch
