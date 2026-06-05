@@ -3,31 +3,42 @@
   set_fact:
     volume_id: "{{ cr.description | regex_search('vol-[a-zA-Z0-9]+') }}"
 
-# ✅ Extract Target Size
+# ✅ Extract Target Size (SAFE ✅)
 - name: Extract Target Size
   set_fact:
-    target_size: "{{ cr.description | regex_search('[0-9]+') | int }}"
+    target_size: "{{ (cr.description | regex_search('([0-9]+)GB', '\\1')) | int }}"
 
-# ✅ Validate
+# ✅ Ensure integer
+- name: Force integer type
+  set_fact:
+    target_size: "{{ target_size | int }}"
+
+# ✅ DEBUG TYPES
+- name: Debug size type
+  debug:
+    msg: "Size={{ target_size }} | Type={{ target_size | type_debug }}"
+
+# ✅ Validate Volume ID
 - name: Validate Volume ID
   fail:
     msg: "Volume ID missing in {{ cr.number }}"
   when: volume_id is not defined
 
+# ✅ Validate Size ✅ (FIXED)
 - name: Validate Size
   fail:
     msg: "Invalid size in {{ cr.number }}"
-  when: target_size <= 0
+  when: (target_size | int) <= 0
 
-# ✅ Debug ticket info
+# ✅ Debug details
 - name: Show CR details
   debug:
     msg:
       - "Ticket: {{ cr.number }}"
-      - "Volume: {{ volume_id }}"
+      - "Volume ID: {{ volume_id }}"
       - "Target Size: {{ target_size }}GB"
 
-# ✅ Get current volume size (IAM ROLE USED ✅)
+# ✅ Get current EBS info
 - name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
@@ -35,18 +46,20 @@
       - "{{ volume_id }}"
   register: vol_info
 
-- name: Get current size
+# ✅ Current size
+- name: Set current size
   set_fact:
     current_size: "{{ vol_info.volumes[0].size }}"
 
-# ✅ Show comparison
-- debug:
-    msg: "Current: {{ current_size }}GB → Target: {{ target_size }}GB"
+# ✅ Compare
+- name: Show comparison
+  debug:
+    msg: "Current={{ current_size }}GB | Target={{ target_size }}GB"
 
 # ✅ SCALE BLOCK
 - block:
 
-    - name: Scale EBS volume ✅
+    - name: Scale EBS volume
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
         volume_id: "{{ volume_id }}"
@@ -54,11 +67,11 @@
         state: present
       when: target_size > current_size
 
-    - name: Wait for AWS update
+    - name: Wait for AWS
       pause:
         seconds: 20
 
-    # ✅ Resize filesystem
+    # ✅ Filesystem resize
     - name: Resize filesystem
       shell: |
         if df -Th | grep xfs; then
@@ -68,22 +81,22 @@
           resize2fs /dev/xvda1
         fi
 
-    - name: Set success
+    - name: Mark success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
-    - name: Set failure
+    - name: Mark failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Show result in AAP logs
+# ✅ Final status
 - name: Show result
   debug:
     msg: "Ticket {{ cr.number }} → {{ scale_status }}"
 
-# ✅ Update ServiceNow → Implement
+# ✅ Update ServiceNow
 - name: Update ServiceNow
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
@@ -95,7 +108,7 @@
     headers:
       Content-Type: "application/json"
     body:
-      state: "Implement"
+      state: "-2"   # Implement state ✅
       work_notes: |
         ✅ Automation Update
 
@@ -105,4 +118,4 @@
         Status: {{ scale_status }}
         Time: {{ ansible_date_time.iso8601 }}
 
-        Message: Auto processed without approval.
+        Message: Auto processed from NEW state.
