@@ -3,38 +3,37 @@
   set_fact:
     volume_id: "{{ cr.description | regex_search('vol-[a-zA-Z0-9]+') }}"
 
-# ✅ Extract Target Size (ROBUST FIX ✅)
-- name: Extract raw target size
+# ✅ Extract Target Size
+- name: Extract raw size
   set_fact:
     target_size_raw: "{{ cr.description | regex_search('[0-9]+') }}"
 
-# ✅ Convert to integer
-- name: Convert target size to int ✅
+# ✅ Convert to int
+- name: Convert size to int
   set_fact:
     target_size: "{{ target_size_raw | int }}"
 
-# ✅ DEBUG (VERY IMPORTANT 🔥)
+# ✅ Debug values
 - name: Debug extracted values
   debug:
     msg:
       - "Ticket: {{ cr.number }}"
-      - "Volume ID: {{ volume_id }}"
+      - "Volume: {{ volume_id }}"
       - "Raw Size: {{ target_size_raw }}"
-      - "Final Size: {{ target_size }}"
-      - "Type: {{ target_size | type_debug }}"
+      - "Final Size: {{ target_size | int }}"
 
-# ✅ VALIDATION
+# ✅ Validate
 - name: Validate Volume ID
   fail:
-    msg: "❌ Volume ID missing in {{ cr.number }}"
+    msg: "❌ Volume ID missing"
   when: volume_id is not defined
 
-- name: Validate Target Size ✅
+- name: Validate Size
   fail:
-    msg: "❌ Invalid size in {{ cr.number }}"
-  when: target_size <= 0
+    msg: "❌ Invalid size"
+  when: (target_size | int) <= 0
 
-# ✅ Get current EBS info (IAM ROLE used ✅)
+# ✅ Get current EBS size
 - name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
@@ -42,34 +41,30 @@
       - "{{ volume_id }}"
   register: vol_info
 
-# ✅ Set current size
 - name: Set current size
   set_fact:
     current_size: "{{ vol_info.volumes[0].size }}"
 
-# ✅ Compare sizes
-- name: Show size comparison
+# ✅ Debug compare
+- name: Show comparison
   debug:
-    msg: "Current={{ current_size }}GB → Target={{ target_size }}GB"
+    msg: "Current={{ current_size }} → Target={{ target_size }}"
 
-# ✅ SCALE BLOCK
+# ✅ SCALE
 - block:
 
-    # ✅ Scale EBS
-    - name: Scale EBS volume
+    - name: Scale EBS ✅
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
         volume_id: "{{ volume_id }}"
-        size: "{{ target_size }}"
+        size: "{{ target_size | int }}"
         state: present
-      when: target_size > current_size
+      when: (target_size | int) > current_size
 
-    # ✅ Wait for AWS update
-    - name: Wait for EBS modification
+    - name: Wait
       pause:
         seconds: 20
 
-    # ✅ Resize filesystem
     - name: Resize filesystem
       shell: |
         if df -Th | grep xfs; then
@@ -79,25 +74,23 @@
           resize2fs /dev/xvda1
         fi
 
-    # ✅ Success
-    - name: Mark success
+    - name: Set success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
-    # ✅ Failure
-    - name: Mark failure
+    - name: Set failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Show final status
+# ✅ Show result
 - name: Show result
   debug:
     msg: "✅ Ticket {{ cr.number }} → {{ scale_status }}"
 
 # ✅ Update ServiceNow
-- name: Update ServiceNow
+- name: Update CR
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
     method: PATCH
@@ -108,14 +101,12 @@
     headers:
       Content-Type: "application/json"
     body:
-      state: "-2"   # Implement ✅
+      state: "-2"
       work_notes: |
         ✅ Automation Update
 
         Ticket: {{ cr.number }}
-        Volume ID: {{ volume_id }}
-        Target Size: {{ target_size }}GB
+        Volume: {{ volume_id }}
+        Size: {{ target_size }}GB
         Status: {{ scale_status }}
         Time: {{ ansible_date_time.iso8601 }}
-
-        Message: Processed automatically from NEW state.

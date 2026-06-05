@@ -1,4 +1,4 @@
-- name: EBS Scaling Automation (New Tickets Only)
+- name: Process ONLY Latest CR
   hosts: ec2-server
   become: yes
   gather_facts: yes
@@ -8,8 +8,7 @@
 
   tasks:
 
-    - name: Process each CR
+    - name: Process latest CR only
       include_tasks: process.yml
-      loop: "{{ cr_list }}"
-      loop_control:
-        loop_var: cr
+      vars:
+        cr: "{{ latest_cr }}"

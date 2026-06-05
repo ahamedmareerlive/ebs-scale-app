@@ -1,14 +1,14 @@
-# ✅ Fetch only NEW tickets
-- name: Build ServiceNow query (State = New )
+# ✅ Fetch ONLY latest NEW CR
+- name: Build ServiceNow query
   set_fact:
-    snow_query: "{{ 'short_descriptionLIKEDisk Scale EBS^state=-5' | urlencode }}"
+    snow_query: "{{ 'short_descriptionLIKEDisk^state=-5^ORDERBYDESCsys_created_on' | urlencode }}"
 
 # ✅ Debug URL
 - name: Show API URL
   debug:
     msg: "{{ snow_instance }}/api/now/table/change_request?sysparm_query={{ snow_query }}"
 
-# ✅ Call ServiceNow
+# ✅ Fetch CRs
 - name: Fetch Change Requests
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request?sysparm_query={{ snow_query }}"
@@ -21,25 +21,23 @@
       Accept: "application/json"
   register: cr_response
 
-# ✅ Show count
-- name: Show CR count
+# ✅ Debug full response
+- name: Show full response
   debug:
-    msg: "Total CRs fetched: {{ cr_response.json.result | length }}"
+    var: cr_response.json.result
 
-# ✅ Show ticket numbers
-- name: Show Ticket Numbers
-  debug:
-    msg: "Processing Ticket: {{ item.number }}"
-  loop: "{{ cr_response.json.result }}"
-  when: cr_response.json.result | length > 0
-
-# ✅ Fail if empty
+# ✅ Ensure at least 1 result
 - name: Fail if no CR found
   fail:
-    msg: "No NEW Change Requests found"
+    msg: "No NEW CR found"
   when: cr_response.json.result | length == 0
 
-# ✅ Store CR list
-- name: Store CR list
+# ✅ Pick ONLY latest CR ✅
+- name: Select latest CR
   set_fact:
-    cr_list: "{{ cr_response.json.result }}"
+    latest_cr: "{{ cr_response.json.result[0] }}"
+
+# ✅ Show selected CR
+- name: Show selected CR
+  debug:
+    msg: "✅ Processing ONLY latest ticket: {{ latest_cr.number }}"
