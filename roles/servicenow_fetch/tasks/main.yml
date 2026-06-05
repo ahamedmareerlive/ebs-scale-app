@@ -1,7 +1,7 @@
 # ✅ Fetch only NEW tickets
 - name: Build ServiceNow query (State = New )
   set_fact:
-    snow_query: "{{ 'short_descriptionLIKEDisk Scale EBS^state=New' | urlencode }}"
+    snow_query: "{{ 'short_descriptionLIKEDisk Scale EBS^state=-5' | urlencode }}"
 
 # ✅ Debug URL
 - name: Show API URL
