@@ -3,42 +3,38 @@
   set_fact:
     volume_id: "{{ cr.description | regex_search('vol-[a-zA-Z0-9]+') }}"
 
-# ✅ Extract Target Size (SAFE ✅)
-- name: Extract Target Size
+# ✅ Extract Target Size (ROBUST FIX ✅)
+- name: Extract raw target size
   set_fact:
-    target_size: "{{ (cr.description | regex_search('([0-9]+)GB', '\\1')) | int }}"
+    target_size_raw: "{{ cr.description | regex_search('[0-9]+') }}"
 
-# ✅ Ensure integer
-- name: Force integer type
+# ✅ Convert to integer
+- name: Convert target size to int ✅
   set_fact:
-    target_size: "{{ target_size | int }}"
+    target_size: "{{ target_size_raw | int }}"
 
-# ✅ DEBUG TYPES
-- name: Debug size type
-  debug:
-    msg: "Size={{ target_size }} | Type={{ target_size | type_debug }}"
-
-# ✅ Validate Volume ID
-- name: Validate Volume ID
-  fail:
-    msg: "Volume ID missing in {{ cr.number }}"
-  when: volume_id is not defined
-
-# ✅ Validate Size ✅ (FIXED)
-- name: Validate Size
-  fail:
-    msg: "Invalid size in {{ cr.number }}"
-  when: (target_size | int) <= 0
-
-# ✅ Debug details
-- name: Show CR details
+# ✅ DEBUG (VERY IMPORTANT 🔥)
+- name: Debug extracted values
   debug:
     msg:
       - "Ticket: {{ cr.number }}"
       - "Volume ID: {{ volume_id }}"
-      - "Target Size: {{ target_size }}GB"
+      - "Raw Size: {{ target_size_raw }}"
+      - "Final Size: {{ target_size }}"
+      - "Type: {{ target_size | type_debug }}"
 
-# ✅ Get current EBS info
+# ✅ VALIDATION
+- name: Validate Volume ID
+  fail:
+    msg: "❌ Volume ID missing in {{ cr.number }}"
+  when: volume_id is not defined
+
+- name: Validate Target Size ✅
+  fail:
+    msg: "❌ Invalid size in {{ cr.number }}"
+  when: target_size <= 0
+
+# ✅ Get current EBS info (IAM ROLE used ✅)
 - name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
@@ -46,19 +42,20 @@
       - "{{ volume_id }}"
   register: vol_info
 
-# ✅ Current size
+# ✅ Set current size
 - name: Set current size
   set_fact:
     current_size: "{{ vol_info.volumes[0].size }}"
 
-# ✅ Compare
-- name: Show comparison
+# ✅ Compare sizes
+- name: Show size comparison
   debug:
-    msg: "Current={{ current_size }}GB | Target={{ target_size }}GB"
+    msg: "Current={{ current_size }}GB → Target={{ target_size }}GB"
 
 # ✅ SCALE BLOCK
 - block:
 
+    # ✅ Scale EBS
     - name: Scale EBS volume
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
@@ -67,11 +64,12 @@
         state: present
       when: target_size > current_size
 
-    - name: Wait for AWS
+    # ✅ Wait for AWS update
+    - name: Wait for EBS modification
       pause:
         seconds: 20
 
-    # ✅ Filesystem resize
+    # ✅ Resize filesystem
     - name: Resize filesystem
       shell: |
         if df -Th | grep xfs; then
@@ -81,20 +79,22 @@
           resize2fs /dev/xvda1
         fi
 
+    # ✅ Success
     - name: Mark success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
+    # ✅ Failure
     - name: Mark failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Final status
+# ✅ Show final status
 - name: Show result
   debug:
-    msg: "Ticket {{ cr.number }} → {{ scale_status }}"
+    msg: "✅ Ticket {{ cr.number }} → {{ scale_status }}"
 
 # ✅ Update ServiceNow
 - name: Update ServiceNow
@@ -108,7 +108,7 @@
     headers:
       Content-Type: "application/json"
     body:
-      state: "-2"   # Implement state ✅
+      state: "-2"   # Implement ✅
       work_notes: |
         ✅ Automation Update
 
@@ -118,4 +118,4 @@
         Status: {{ scale_status }}
         Time: {{ ansible_date_time.iso8601 }}
 
-        Message: Auto processed from NEW state.
+        Message: Processed automatically from NEW state.
