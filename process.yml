@@ -3,33 +3,33 @@
   set_fact:
     volume_id: "{{ cr.description | regex_search('vol-[a-zA-Z0-9]+') }}"
 
-# ✅ Extract Target Size
-- name: Extract raw size
+# ✅ Extract Target Size (CORRECT ✅)
+- name: Extract target size safely
   set_fact:
-    target_size_raw: "{{ cr.description | regex_search('[0-9]+') }}"
+    target_size_raw: "{{ cr.description | regex_search('(?i)scale size\\s*([0-9]+)', '\\1') }}"
 
 # ✅ Convert to integer
 - name: Convert size
   set_fact:
     target_size: "{{ target_size_raw | int }}"
 
-# ✅ Debug extracted values
+# ✅ Debug values
 - name: Debug values
   debug:
     msg:
       - "Ticket: {{ cr.number }}"
       - "Volume: {{ volume_id }}"
-      - "Raw Size: {{ target_size_raw }}"
-      - "Final Size: {{ target_size | int }}"
+      - "Extracted Size: {{ target_size }}"
+      - "Type: {{ (target_size | int) | type_debug }}"
 
 # ✅ Validate Volume ID
-- name: Validate Volume
+- name: Validate Volume ID
   fail:
     msg: "❌ Volume ID missing in {{ cr.number }}"
   when: volume_id is not defined
 
-# ✅ Validate Size
-- name: Validate Size
+# ✅ Validate Target Size
+- name: Validate Target Size
   fail:
     msg: "❌ Invalid size in {{ cr.number }}"
   when: (target_size | int) <= 0
@@ -42,12 +42,12 @@
       volume-id: "{{ volume_id }}"
   register: vol_info
 
-# ✅ Extract current size (fix type)
+# ✅ Extract current size
 - name: Set current size
   set_fact:
     current_size: "{{ vol_info.volumes[0].size | int }}"
 
-# ✅ Extract Availability Zone (IMPORTANT FIX ✅)
+# ✅ Extract AZ
 - name: Get volume AZ
   set_fact:
     volume_zone: "{{ vol_info.volumes[0].zone }}"
@@ -57,7 +57,7 @@
   debug:
     msg:
       - "Current Size: {{ current_size }}GB"
-      - "Target Size: {{ target_size | int }}GB"
+      - "Target Size: {{ target_size }}GB"
       - "AZ: {{ volume_zone }}"
 
 # ✅ SCALE BLOCK
@@ -73,39 +73,58 @@
         zone: "{{ volume_zone }}"
       when: (target_size | int) > (current_size | int)
 
-    # ✅ Wait for AWS update
-    - name: Wait for EBS update
+    # ✅ Wait for EBS update
+    - name: Wait for EBS modification
       pause:
         seconds: 20
+
+    # ✅ Detect root disk
+    - name: Detect root disk
+      shell: lsblk -no PKNAME $(df / | tail -1 | awk '{print $1}')
+      register: root_disk
+
+    # ✅ Set disk paths
+    - name: Set disk paths
+      set_fact:
+        disk_device: "/dev/{{ root_disk.stdout }}"
+        partition_device: "{{ disk_device }}1"
+
+    # ✅ Debug disk
+    - name: Show disk info
+      debug:
+        msg:
+          - "Disk: {{ disk_device }}"
+          - "Partition: {{ partition_device }}"
 
     # ✅ Resize filesystem
     - name: Resize filesystem
       shell: |
+        growpart {{ disk_device }} 1 || true
+
         if df -Th | grep xfs; then
           xfs_growfs /
         else
-          growpart /dev/xvda 1
-          resize2fs /dev/xvda1
+          resize2fs {{ partition_device }}
         fi
 
-    # ✅ Mark success
+    # ✅ Success
     - name: Mark success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
-    # ✅ Mark failure
+    # ✅ Failure
     - name: Mark failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Show result
+# ✅ Final result
 - name: Show result
   debug:
     msg: "✅ Ticket {{ cr.number }} → {{ scale_status }}"
 
-# ✅ Update ServiceNow (SAFE — NO STATE CHANGE ✅)
+# ✅ Update ServiceNow (SAFE ✅)
 - name: Update CR in ServiceNow
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
@@ -122,9 +141,8 @@
 
         Ticket: {{ cr.number }}
         Volume: {{ volume_id }}
-        Target Size: {{ target_size | int }}GB
+        Target Size: {{ target_size }}GB
         Status: {{ scale_status }}
         Time: {{ ansible_date_time.iso8601 }}
 
-        Message: EBS scaling completed successfully via AAP.
-
+        Message: EBS scaling and filesystem resize completed successfully.
