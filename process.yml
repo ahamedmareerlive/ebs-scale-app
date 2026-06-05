@@ -3,13 +3,13 @@
   set_fact:
     volume_id: "{{ cr.description | regex_search('vol-[a-zA-Z0-9]+') }}"
 
-# ✅ Extract Target Size
+# ✅ Extract Target Size (safe)
 - name: Extract raw size
   set_fact:
     target_size_raw: "{{ cr.description | regex_search('[0-9]+') }}"
 
 # ✅ Convert to int
-- name: Convert size to int
+- name: Convert size
   set_fact:
     target_size: "{{ target_size_raw | int }}"
 
@@ -21,39 +21,41 @@
       - "Volume: {{ volume_id }}"
       - "Raw Size: {{ target_size_raw }}"
       - "Final Size: {{ target_size | int }}"
+      - "Type: {{ (target_size | int) | type_debug }}"
 
-# ✅ Validate
+# ✅ Validation
 - name: Validate Volume ID
   fail:
-    msg: "❌ Volume ID missing"
+    msg: "Volume ID missing"
   when: volume_id is not defined
 
 - name: Validate Size
   fail:
-    msg: "❌ Invalid size"
+    msg: "Invalid size"
   when: (target_size | int) <= 0
 
-# ✅ Get current EBS size
+# ✅ Get current volume info (FIXED ✅)
 - name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
-    volume_ids:
-      - "{{ volume_id }}"
+    filters:
+      volume-id: "{{ volume_id }}"
   register: vol_info
 
+# ✅ Extract current size
 - name: Set current size
   set_fact:
     current_size: "{{ vol_info.volumes[0].size }}"
 
-# ✅ Debug compare
+# ✅ Debug comparison
 - name: Show comparison
   debug:
-    msg: "Current={{ current_size }} → Target={{ target_size }}"
+    msg: "Current={{ current_size }}GB → Target={{ target_size | int }}GB"
 
-# ✅ SCALE
+# ✅ SCALE BLOCK
 - block:
 
-    - name: Scale EBS ✅
+    - name: Scale EBS volume ✅
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
         volume_id: "{{ volume_id }}"
@@ -61,10 +63,11 @@
         state: present
       when: (target_size | int) > current_size
 
-    - name: Wait
+    - name: Wait for AWS update
       pause:
         seconds: 20
 
+    # ✅ Resize filesystem
     - name: Resize filesystem
       shell: |
         if df -Th | grep xfs; then
@@ -74,17 +77,17 @@
           resize2fs /dev/xvda1
         fi
 
-    - name: Set success
+    - name: Mark success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
-    - name: Set failure
+    - name: Mark failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Show result
+# ✅ Final result
 - name: Show result
   debug:
     msg: "✅ Ticket {{ cr.number }} → {{ scale_status }}"
@@ -107,6 +110,6 @@
 
         Ticket: {{ cr.number }}
         Volume: {{ volume_id }}
-        Size: {{ target_size }}GB
+        Size: {{ target_size | int }}GB
         Status: {{ scale_status }}
         Time: {{ ansible_date_time.iso8601 }}
