@@ -13,8 +13,8 @@
   set_fact:
     target_size: "{{ target_size_raw | int }}"
 
-# ✅ DEBUG
-- name: Debug extracted values
+# ✅ Debug values
+- name: Debug values
   debug:
     msg:
       - "Ticket: {{ cr.number }}"
@@ -24,19 +24,18 @@
       - "Final Size: {{ target_size }}"
       - "Type: {{ target_size | type_debug }}"
 
-# ✅ Validate Volume ID
+# ✅ Validate inputs
 - name: Validate Volume ID
   fail:
     msg: "❌ Volume ID missing in {{ cr.number }}"
   when: volume_id is not defined
 
-# ✅ Validate Target Size
 - name: Validate Target Size
   fail:
-    msg: "❌ Could not extract valid size from description: {{ cr.description }}"
+    msg: "❌ Invalid size in {{ cr.number }}"
   when: (target_size | int) <= 0
 
-# ✅ Get volume info
+# ✅ Get EBS info
 - name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
@@ -65,7 +64,7 @@
 # ✅ SCALE BLOCK
 - block:
 
-    # ✅ Scale volume (FINAL FIX ✅)
+    # ✅ Scale EBS
     - name: Scale EBS volume
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
@@ -75,28 +74,39 @@
         zone: "{{ volume_zone }}"
       when: (target_size | int) > (current_size | int)
 
-    # ✅ Wait for AWS update
+    # ✅ Wait
     - name: Wait for EBS modification
       pause:
         seconds: 20
 
-    # ✅ Detect root disk
+    # ✅ Detect root disk (FIXED ✅)
     - name: Detect root disk
       shell: lsblk -no PKNAME $(df / | tail -1 | awk '{print $1}')
       register: root_disk
 
+    # ✅ Clean output
+    - name: Clean root disk output
+      set_fact:
+        root_disk_clean: "{{ root_disk.stdout | trim }}"
+
+    # ✅ Validate detection
+    - name: Fail if disk not detected
+      fail:
+        msg: "❌ Could not detect root disk"
+      when: root_disk_clean == ""
+
     # ✅ Set disk paths
     - name: Set disk paths
       set_fact:
-        disk_device: "/dev/{{ root_disk.stdout }}"
-        partition_device: "{{ disk_device }}1"
+        disk_device: "/dev/{{ root_disk_clean }}"
+        partition_device: "/dev/{{ root_disk_clean }}1"
 
     # ✅ Debug disk
     - name: Show disk info
       debug:
         msg:
-          - "Disk: {{ disk_device }}"
-          - "Partition: {{ partition_device }}"
+          - "Disk Device: {{ disk_device }}"
+          - "Partition Device: {{ partition_device }}"
 
     # ✅ Resize filesystem
     - name: Resize filesystem
@@ -109,19 +119,17 @@
           resize2fs {{ partition_device }}
         fi
 
-    # ✅ Success
     - name: Mark success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
-    # ✅ Failure
     - name: Mark failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ FINAL RESULT
+# ✅ Final result
 - name: Show result
   debug:
     msg: "✅ Ticket {{ cr.number }} → {{ scale_status }}"
@@ -149,3 +157,4 @@
         Time: {{ ansible_date_time.iso8601 }}
 
         Message: EBS scaling and filesystem resize completed successfully.
+
