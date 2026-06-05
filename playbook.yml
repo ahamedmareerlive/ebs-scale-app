@@ -1,6 +1,7 @@
 - name: EBS Scaling + Filesystem Resize
-  hosts: localhost
-  gather_facts: no
+  hosts: ec2-server
+  become: yes
+  gather_facts: yes
 
   roles:
     - servicenow_fetch
@@ -12,3 +13,4 @@
       loop: "{{ cr_list }}"
       loop_control:
         loop_var: cr
+

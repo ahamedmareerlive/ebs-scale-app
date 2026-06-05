@@ -8,8 +8,27 @@
   set_fact:
     target_size: "{{ cr.description | regex_search('[0-9]+') | int }}"
 
-# ✅ Get Volume Info
-- name: Get volume info
+# ✅ Validate inputs (IMPORTANT 🔥)
+- name: Fail if volume_id missing
+  fail:
+    msg: "Volume ID not found in ticket {{ cr.number }}"
+  when: volume_id is not defined
+
+- name: Fail if invalid size
+  fail:
+    msg: "Invalid target size in ticket {{ cr.number }}"
+  when: target_size <= 0
+
+# ✅ Print details in AAP logs ✅
+- name: Show CR details
+  debug:
+    msg:
+      - "Ticket: {{ cr.number }}"
+      - "Volume ID: {{ volume_id }}"
+      - "Target Size: {{ target_size }}GB"
+
+# ✅ Get current volume info (IAM ROLE USED ✅)
+- name: Get current volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
     volume_ids:
@@ -21,14 +40,14 @@
   set_fact:
     current_size: "{{ vol_info.volumes[0].size }}"
 
-# ✅ Debug
+# ✅ Show size comparison
 - debug:
-    msg: "Volume {{ volume_id }} current={{ current_size }}GB target={{ target_size }}GB"
+    msg: "Current size: {{ current_size }}GB → Target: {{ target_size }}GB"
 
-# ✅ SCALE EBS
+# ✅ SCALE BLOCK
 - block:
 
-    - name: Scale EBS volume
+    - name: Scale EBS volume ✅
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
         volume_id: "{{ volume_id }}"
@@ -40,10 +59,8 @@
       pause:
         seconds: 20
 
-    # ✅ FILESYSTEM RESIZE (REMOTE EC2)
-    - name: Resize filesystem on EC2
-      delegate_to: ec2-server
-      become: yes
+    # ✅ Filesystem resize
+    - name: Resize filesystem ✅
       shell: |
         if df -Th | grep xfs; then
           xfs_growfs /
@@ -52,32 +69,23 @@
           resize2fs /dev/xvda1
         fi
 
-    - name: Mark success
+    - name: Set success status
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
-    - name: Mark failure
+    - name: Set failure status
       set_fact:
         scale_status: "FAILED"
 
-# ✅ UPDATE SERVICENOW SUCCESS
-- name: Update CR success
-  uri:
-    url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
-    method: PATCH
-    user: "{{ snow_user }}"
-    password: "{{ snow_password }}"
-    force_basic_auth: yes
-    body_format: json
-    body:
-      work_notes: "EBS {{ volume_id }} scaled to {{ target_size }}GB and filesystem resized"
-      state: "Implement"
-  when: scale_status == "SUCCESS"
+# ✅ Print final status
+- name: Show result
+  debug:
+    msg: "Ticket {{ cr.number }} → Status: {{ scale_status }}"
 
-# ✅ UPDATE SERVICENOW FAILURE
-- name: Update CR failure
+# ✅ Update ServiceNow ✅
+- name: Update ServiceNow
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
     method: PATCH
@@ -85,7 +93,17 @@
     password: "{{ snow_password }}"
     force_basic_auth: yes
     body_format: json
+    headers:
+      Content-Type: "application/json"
     body:
-      work_notes: "Scaling FAILED - L2 escalation required"
-      state: "Assess"
-  when: scale_status == "FAILED"
+      work_notes: |
+        ✅ Automation Update
+
+        Ticket: {{ cr.number }}
+        Volume ID: {{ volume_id }}
+        Target Size: {{ target_size }}GB
+        Status: {{ scale_status }}
+        Time: {{ ansible_date_time.iso8601 }}
+
+        Message: Volume processed via AAP automation.
+      state: "Implement"

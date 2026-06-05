@@ -14,11 +14,11 @@
       Accept: "application/json"
   register: cr_response
 
-- name: Debug CR response
+- name: Show Ticket Numbers
   debug:
-    var: cr_response.json
+    msg: "Processing Change Request: {{ item.number }}"
+  loop: "{{ cr_response.json.result }}"
 
 - name: Store CR list
   set_fact:
     cr_list: "{{ cr_response.json.result }}"
-
