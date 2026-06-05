@@ -3,7 +3,7 @@
   set_fact:
     volume_id: "{{ cr.description | regex_search('vol-[a-zA-Z0-9]+') }}"
 
-# ✅ Extract Target Size (safe)
+# ✅ Extract Size
 - name: Extract raw size
   set_fact:
     target_size_raw: "{{ cr.description | regex_search('[0-9]+') }}"
@@ -23,7 +23,7 @@
       - "Final Size: {{ target_size | int }}"
       - "Type: {{ (target_size | int) | type_debug }}"
 
-# ✅ Validation
+# ✅ Validate
 - name: Validate Volume ID
   fail:
     msg: "Volume ID missing"
@@ -34,7 +34,7 @@
     msg: "Invalid size"
   when: (target_size | int) <= 0
 
-# ✅ Get current volume info (FIXED ✅)
+# ✅ Get EBS info (FIXED ✅)
 - name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
@@ -42,28 +42,28 @@
       volume-id: "{{ volume_id }}"
   register: vol_info
 
-# ✅ Extract current size
+# ✅ Convert current size (FIXED ✅)
 - name: Set current size
   set_fact:
-    current_size: "{{ vol_info.volumes[0].size }}"
+    current_size: "{{ vol_info.volumes[0].size | int }}"
 
 # ✅ Debug comparison
 - name: Show comparison
   debug:
-    msg: "Current={{ current_size }}GB → Target={{ target_size | int }}GB"
+    msg: "Current={{ current_size | int }}GB → Target={{ target_size | int }}GB"
 
 # ✅ SCALE BLOCK
 - block:
 
-    - name: Scale EBS volume ✅
+    - name: Scale EBS ✅
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
         volume_id: "{{ volume_id }}"
         size: "{{ target_size | int }}"
         state: present
-      when: (target_size | int) > current_size
+      when: (target_size | int) > (current_size | int)
 
-    - name: Wait for AWS update
+    - name: Wait for EBS update
       pause:
         seconds: 20
 
@@ -77,22 +77,22 @@
           resize2fs /dev/xvda1
         fi
 
-    - name: Mark success
+    - name: Success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
-    - name: Mark failure
+    - name: Failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Final result
+# ✅ Final log
 - name: Show result
   debug:
     msg: "✅ Ticket {{ cr.number }} → {{ scale_status }}"
 
-# ✅ Update ServiceNow
+# ✅ Update ServiceNow (FIXED ✅)
 - name: Update CR
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
@@ -104,7 +104,7 @@
     headers:
       Content-Type: "application/json"
     body:
-      state: "-2"
+      state: "-4"   # ✅ SAFE (Assess state)
       work_notes: |
         ✅ Automation Update
 
