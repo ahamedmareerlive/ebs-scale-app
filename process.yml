@@ -21,7 +21,6 @@
       - "Volume: {{ volume_id }}"
       - "Raw Size: {{ target_size_raw }}"
       - "Final Size: {{ target_size | int }}"
-      - "Type: {{ (target_size | int) | type_debug }}"
 
 # ✅ Validate Volume ID
 - name: Validate Volume
@@ -35,7 +34,7 @@
     msg: "❌ Invalid size in {{ cr.number }}"
   when: (target_size | int) <= 0
 
-# ✅ Get EBS volume details (FIXED ✅)
+# ✅ Get EBS volume info
 - name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
@@ -43,29 +42,38 @@
       volume-id: "{{ volume_id }}"
   register: vol_info
 
-# ✅ Extract current size (FIX TYPE ✅)
+# ✅ Extract current size (fix type)
 - name: Set current size
   set_fact:
     current_size: "{{ vol_info.volumes[0].size | int }}"
 
+# ✅ Extract Availability Zone (IMPORTANT FIX ✅)
+- name: Get volume AZ
+  set_fact:
+    volume_zone: "{{ vol_info.volumes[0].zone }}"
+
 # ✅ Debug comparison
 - name: Compare sizes
   debug:
-    msg: "Current={{ current_size }}GB → Target={{ target_size | int }}GB"
+    msg:
+      - "Current Size: {{ current_size }}GB"
+      - "Target Size: {{ target_size | int }}GB"
+      - "AZ: {{ volume_zone }}"
 
 # ✅ SCALE BLOCK
 - block:
 
-    # ✅ Scale EBS (FIXED MODULE ✅)
+    # ✅ Scale EBS (FINAL FIX ✅)
     - name: Scale EBS volume
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
         id: "{{ volume_id }}"
         volume_size: "{{ target_size | int }}"
         modify_volume: true
+        zone: "{{ volume_zone }}"
       when: (target_size | int) > (current_size | int)
 
-    # ✅ Wait for AWS modification
+    # ✅ Wait for AWS update
     - name: Wait for EBS update
       pause:
         seconds: 20
@@ -92,7 +100,7 @@
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Final result log
+# ✅ Show result
 - name: Show result
   debug:
     msg: "✅ Ticket {{ cr.number }} → {{ scale_status }}"
@@ -118,4 +126,5 @@
         Status: {{ scale_status }}
         Time: {{ ansible_date_time.iso8601 }}
 
-        Message: EBS scaling executed via AAP using IAM role.
+        Message: EBS scaling completed successfully via AAP.
+
