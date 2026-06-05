@@ -1,7 +1,14 @@
-- name: Build ServiceNow query (URL encoded)
+# ✅ Fetch only NEW tickets
+- name: Build ServiceNow query (State = New )
   set_fact:
     snow_query: "{{ 'short_descriptionLIKEDisk Scale EBS^state=New' | urlencode }}"
 
+# ✅ Debug URL
+- name: Show API URL
+  debug:
+    msg: "{{ snow_instance }}/api/now/table/change_request?sysparm_query={{ snow_query }}"
+
+# ✅ Call ServiceNow
 - name: Fetch Change Requests
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request?sysparm_query={{ snow_query }}"
@@ -14,11 +21,25 @@
       Accept: "application/json"
   register: cr_response
 
+# ✅ Show count
+- name: Show CR count
+  debug:
+    msg: "Total CRs fetched: {{ cr_response.json.result | length }}"
+
+# ✅ Show ticket numbers
 - name: Show Ticket Numbers
   debug:
-    msg: "Processing Change Request: {{ item.number }}"
+    msg: "Processing Ticket: {{ item.number }}"
   loop: "{{ cr_response.json.result }}"
+  when: cr_response.json.result | length > 0
 
+# ✅ Fail if empty
+- name: Fail if no CR found
+  fail:
+    msg: "No NEW Change Requests found"
+  when: cr_response.json.result | length == 0
+
+# ✅ Store CR list
 - name: Store CR list
   set_fact:
     cr_list: "{{ cr_response.json.result }}"

@@ -8,41 +8,40 @@
   set_fact:
     target_size: "{{ cr.description | regex_search('[0-9]+') | int }}"
 
-# ✅ Validate inputs (IMPORTANT 🔥)
-- name: Fail if volume_id missing
+# ✅ Validate
+- name: Validate Volume ID
   fail:
-    msg: "Volume ID not found in ticket {{ cr.number }}"
+    msg: "Volume ID missing in {{ cr.number }}"
   when: volume_id is not defined
 
-- name: Fail if invalid size
+- name: Validate Size
   fail:
-    msg: "Invalid target size in ticket {{ cr.number }}"
+    msg: "Invalid size in {{ cr.number }}"
   when: target_size <= 0
 
-# ✅ Print details in AAP logs ✅
+# ✅ Debug ticket info
 - name: Show CR details
   debug:
     msg:
       - "Ticket: {{ cr.number }}"
-      - "Volume ID: {{ volume_id }}"
+      - "Volume: {{ volume_id }}"
       - "Target Size: {{ target_size }}GB"
 
-# ✅ Get current volume info (IAM ROLE USED ✅)
-- name: Get current volume info
+# ✅ Get current volume size (IAM ROLE USED ✅)
+- name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
     volume_ids:
       - "{{ volume_id }}"
   register: vol_info
 
-# ✅ Current size
-- name: Set current size
+- name: Get current size
   set_fact:
     current_size: "{{ vol_info.volumes[0].size }}"
 
-# ✅ Show size comparison
+# ✅ Show comparison
 - debug:
-    msg: "Current size: {{ current_size }}GB → Target: {{ target_size }}GB"
+    msg: "Current: {{ current_size }}GB → Target: {{ target_size }}GB"
 
 # ✅ SCALE BLOCK
 - block:
@@ -59,8 +58,8 @@
       pause:
         seconds: 20
 
-    # ✅ Filesystem resize
-    - name: Resize filesystem ✅
+    # ✅ Resize filesystem
+    - name: Resize filesystem
       shell: |
         if df -Th | grep xfs; then
           xfs_growfs /
@@ -69,22 +68,22 @@
           resize2fs /dev/xvda1
         fi
 
-    - name: Set success status
+    - name: Set success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
 
-    - name: Set failure status
+    - name: Set failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Print final status
+# ✅ Show result in AAP logs
 - name: Show result
   debug:
-    msg: "Ticket {{ cr.number }} → Status: {{ scale_status }}"
+    msg: "Ticket {{ cr.number }} → {{ scale_status }}"
 
-# ✅ Update ServiceNow ✅
+# ✅ Update ServiceNow → Implement
 - name: Update ServiceNow
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
@@ -96,6 +95,7 @@
     headers:
       Content-Type: "application/json"
     body:
+      state: "Implement"
       work_notes: |
         ✅ Automation Update
 
@@ -105,5 +105,4 @@
         Status: {{ scale_status }}
         Time: {{ ansible_date_time.iso8601 }}
 
-        Message: Volume processed via AAP automation.
-      state: "Implement"
+        Message: Auto processed without approval.

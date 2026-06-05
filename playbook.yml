@@ -1,4 +1,4 @@
-- name: EBS Scaling + Filesystem Resize
+- name: EBS Scaling Automation (New Tickets Only)
   hosts: ec2-server
   become: yes
   gather_facts: yes
@@ -13,4 +13,3 @@
       loop: "{{ cr_list }}"
       loop_control:
         loop_var: cr
-
