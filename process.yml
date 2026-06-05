@@ -4,7 +4,7 @@
     volume_id: "{{ cr.description | regex_search('vol-[a-zA-Z0-9]+') }}"
 
 # ✅ Extract Target Size (FINAL FIX ✅)
-- name: Extract target size safely
+- name: Extract target size
   set_fact:
     target_size_raw: "{{ (cr.description | regex_findall('(?i)scale.*?([0-9]+)')) | first | default('0') }}"
 
@@ -13,7 +13,7 @@
   set_fact:
     target_size: "{{ target_size_raw | int }}"
 
-# ✅ Debug values
+# ✅ DEBUG
 - name: Debug values
   debug:
     msg:
@@ -22,20 +22,19 @@
       - "Description: {{ cr.description }}"
       - "Raw Size: {{ target_size_raw }}"
       - "Final Size: {{ target_size }}"
-      - "Type: {{ target_size | type_debug }}"
 
-# ✅ Validate inputs
+# ✅ Validate
 - name: Validate Volume ID
   fail:
-    msg: "❌ Volume ID missing in {{ cr.number }}"
+    msg: "❌ Volume ID missing"
   when: volume_id is not defined
 
 - name: Validate Target Size
   fail:
-    msg: "❌ Invalid size in {{ cr.number }}"
+    msg: "❌ Invalid size"
   when: (target_size | int) <= 0
 
-# ✅ Get EBS info
+# ✅ Get volume info
 - name: Get volume info
   amazon.aws.ec2_vol_info:
     region: "{{ aws_region }}"
@@ -43,28 +42,33 @@
       volume-id: "{{ volume_id }}"
   register: vol_info
 
-# ✅ Extract current size
+# ✅ Current size
 - name: Set current size
   set_fact:
     current_size: "{{ vol_info.volumes[0].size | int }}"
 
-# ✅ Extract AZ
+# ✅ Get AZ
 - name: Get volume AZ
   set_fact:
     volume_zone: "{{ vol_info.volumes[0].zone }}"
 
-# ✅ Debug comparison
+# ✅ Prevent shrinking (IMPORTANT ✅)
+- name: Prevent volume shrink
+  fail:
+    msg: "❌ Cannot decrease volume size (Current={{ current_size }}GB, Target={{ target_size }}GB)"
+  when: (target_size | int) < (current_size | int)
+
+# ✅ Compare
 - name: Compare sizes
   debug:
     msg:
-      - "Current Size: {{ current_size }}GB"
-      - "Target Size: {{ target_size }}GB"
+      - "Current: {{ current_size }}GB"
+      - "Target: {{ target_size }}GB"
       - "AZ: {{ volume_zone }}"
 
 # ✅ SCALE BLOCK
 - block:
 
-    # ✅ Scale EBS
     - name: Scale EBS volume
       amazon.aws.ec2_vol:
         region: "{{ aws_region }}"
@@ -74,41 +78,42 @@
         zone: "{{ volume_zone }}"
       when: (target_size | int) > (current_size | int)
 
-    # ✅ Wait
-    - name: Wait for EBS modification
+    - name: Wait
       pause:
         seconds: 20
 
-    # ✅ Detect root disk (FIXED ✅)
+    # ✅ Detect disk
     - name: Detect root disk
       shell: lsblk -no PKNAME $(df / | tail -1 | awk '{print $1}')
       register: root_disk
 
-    # ✅ Clean output
-    - name: Clean root disk output
+    - name: Clean disk name
       set_fact:
         root_disk_clean: "{{ root_disk.stdout | trim }}"
 
-    # ✅ Validate detection
-    - name: Fail if disk not detected
+    - name: Fail if disk missing
       fail:
-        msg: "❌ Could not detect root disk"
+        msg: "❌ Disk detection failed"
       when: root_disk_clean == ""
 
-    # ✅ Set disk paths
+    # ✅ FIX NVMe + xvda naming
     - name: Set disk paths
       set_fact:
         disk_device: "/dev/{{ root_disk_clean }}"
-        partition_device: "/dev/{{ root_disk_clean }}1"
+        partition_device: >-
+          {% if 'nvme' in root_disk_clean %}
+          /dev/{{ root_disk_clean }}p1
+          {% else %}
+          /dev/{{ root_disk_clean }}1
+          {% endif %}
 
-    # ✅ Debug disk
-    - name: Show disk info
+    - name: Debug disk
       debug:
         msg:
-          - "Disk Device: {{ disk_device }}"
-          - "Partition Device: {{ partition_device }}"
+          - "Disk: {{ disk_device }}"
+          - "Partition: {{ partition_device }}"
 
-    # ✅ Resize filesystem
+    # ✅ Resize filesystem (FINAL FIX ✅)
     - name: Resize filesystem
       shell: |
         growpart {{ disk_device }} 1 || true
@@ -119,23 +124,22 @@
           resize2fs {{ partition_device }}
         fi
 
-    - name: Mark success
+    - name: Success
       set_fact:
         scale_status: "SUCCESS"
 
   rescue:
-
-    - name: Mark failure
+    - name: Failure
       set_fact:
         scale_status: "FAILED"
 
-# ✅ Final result
+# ✅ Final log
 - name: Show result
   debug:
     msg: "✅ Ticket {{ cr.number }} → {{ scale_status }}"
 
-# ✅ Update ServiceNow (SAFE ✅)
-- name: Update CR in ServiceNow
+# ✅ Update ServiceNow
+- name: Update CR
   uri:
     url: "{{ snow_instance }}/api/now/table/change_request/{{ cr.sys_id }}"
     method: PATCH
@@ -155,6 +159,4 @@
         New Size: {{ target_size }}GB
         Status: {{ scale_status }}
         Time: {{ ansible_date_time.iso8601 }}
-
-        Message: EBS scaling and filesystem resize completed successfully.
 
